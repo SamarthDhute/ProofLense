@@ -9,6 +9,7 @@ from backend.app.models.workspace import Workspace
 from backend.app.services.workspace_service import WorkspaceService
 from backend.app.storage.base import StorageService
 from backend.app.storage.local import LocalStorageService
+from backend.app.storage.supabase import SupabaseStorageService
 
 
 _storage_instance: Optional[StorageService] = None
@@ -18,7 +19,14 @@ def get_storage_service() -> StorageService:
     """Dependency provider for storage service singleton."""
     global _storage_instance
     if _storage_instance is None:
-        _storage_instance = LocalStorageService(settings.STORAGE_LOCAL_ROOT)
+        if settings.STORAGE_BACKEND == "supabase" and settings.SUPABASE_SERVICE_ROLE_KEY:
+            _storage_instance = SupabaseStorageService(
+                supabase_url=settings.SUPABASE_URL,
+                service_role_key=settings.SUPABASE_SERVICE_ROLE_KEY,
+                bucket=settings.SUPABASE_STORAGE_BUCKET,
+            )
+        else:
+            _storage_instance = LocalStorageService(settings.STORAGE_LOCAL_ROOT)
     return _storage_instance
 
 

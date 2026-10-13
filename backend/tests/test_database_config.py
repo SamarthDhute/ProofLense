@@ -119,3 +119,23 @@ def test_supabase_host_detection():
     assert is_supabase_host("127.0.0.1") is False
     assert is_supabase_host("") is False
     assert is_supabase_host(None) is False
+
+
+def test_missing_database_url_in_non_test_environment_fails():
+    """Verify application fails closed when DATABASE_URL is missing in non-test environments."""
+    from backend.app.core.config import Settings
+
+    with pytest.raises(ValueError, match="DATABASE_URL is not configured"):
+        Settings(ENVIRONMENT="production", DATABASE_URL=None, _env_file=None)
+
+    with pytest.raises(ValueError, match="DATABASE_URL is not configured"):
+        Settings(ENVIRONMENT="development", DATABASE_URL="", _env_file=None)
+
+
+def test_missing_database_url_in_test_environment_defaults_isolated_db():
+    """Verify test environment safely defaults to isolated test database when omitted."""
+    from backend.app.core.config import Settings
+
+    settings_test = Settings(ENVIRONMENT="test", DATABASE_URL=None, _env_file=None)
+    assert settings_test.DATABASE_URL == "postgresql+asyncpg://postgres:1234@localhost:5432/prooflens"
+

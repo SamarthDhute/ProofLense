@@ -15,7 +15,7 @@ async def test_health_endpoint(client: AsyncClient):
     assert data["database"] == "healthy"
     assert data["database_provider"] in ("supabase", "postgresql")
     assert data["storage"] == "healthy"
-    assert data["storage_type"] == "local"
+    assert data["storage_type"] in ("supabase", "local")
 
     # Canonical 5-tuple embedding config verification
     cfg = data["active_embedding_config"]

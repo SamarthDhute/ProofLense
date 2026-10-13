@@ -31,14 +31,26 @@ async def check_health(
     except Exception as exc:
         db_status = f"unhealthy: {redact_db_error(exc)}"
 
+    storage_type = "supabase" if (settings.STORAGE_BACKEND == "supabase" and settings.SUPABASE_SERVICE_ROLE_KEY) else "local"
     storage_status = "healthy"
     try:
-        os.makedirs(settings.STORAGE_LOCAL_ROOT, exist_ok=True)
-        test_path = os.path.join(settings.STORAGE_LOCAL_ROOT, ".health_check")
-        with open(test_path, "w") as f:
-            f.write("ok")
-        if os.path.exists(test_path):
-            os.remove(test_path)
+        if storage_type == "supabase":
+            from backend.app.storage.supabase import SupabaseStorageService
+            svc = SupabaseStorageService(
+                supabase_url=settings.SUPABASE_URL,
+                service_role_key=settings.SUPABASE_SERVICE_ROLE_KEY,
+                bucket=settings.SUPABASE_STORAGE_BUCKET,
+            )
+            bucket_healthy = await svc.check_bucket_health()
+            if not bucket_healthy:
+                storage_status = f"unhealthy: bucket '{settings.SUPABASE_STORAGE_BUCKET}' inaccessible"
+        else:
+            os.makedirs(settings.STORAGE_LOCAL_ROOT, exist_ok=True)
+            test_path = os.path.join(settings.STORAGE_LOCAL_ROOT, ".health_check")
+            with open(test_path, "w") as f:
+                f.write("ok")
+            if os.path.exists(test_path):
+                os.remove(test_path)
     except Exception as exc:
         storage_status = f"unhealthy: {str(exc)}"
 
@@ -50,7 +62,7 @@ async def check_health(
         database=db_status,
         database_provider="supabase" if settings.is_supabase else "postgresql",
         storage=storage_status,
-        storage_type="local",
+        storage_type=storage_type,
         active_embedding_config=settings.ACTIVE_EMBEDDING_CONFIG._asdict(),
         environment=settings.ENVIRONMENT,
         version="1.0.0",

@@ -1,6 +1,6 @@
 import os
 from typing import Any, Dict, NamedTuple, Optional
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from backend.app.core.database_url import (
@@ -26,9 +26,9 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     # Primary Supabase / PostgreSQL Database URLs
-    DATABASE_URL: str = Field(
-        default="postgresql+asyncpg://postgres:1234@localhost:5432/prooflens",
-        description="Async SQLAlchemy database URL. Standard Supabase URLs (postgresql://) are auto-normalized.",
+    DATABASE_URL: Optional[str] = Field(
+        default=None,
+        description="Async SQLAlchemy database URL. Must be explicitly configured via .env or environment in non-test setups.",
     )
     SYNC_DATABASE_URL: Optional[str] = Field(
         default=None,
@@ -39,8 +39,24 @@ class Settings(BaseSettings):
         description="SSL mode for remote connections (require, disable, verify-full).",
     )
 
-    # Local Storage Root
+    # Storage Configuration
+    STORAGE_BACKEND: str = Field(
+        default="supabase",
+        description="Active storage backend: 'supabase' or 'local'.",
+    )
     STORAGE_LOCAL_ROOT: str = "./data/storage"
+    SUPABASE_URL: str = Field(
+        default="https://aefqqbwargaflmmfpptn.supabase.co",
+        description="Supabase project URL for REST & Storage APIs.",
+    )
+    SUPABASE_SERVICE_ROLE_KEY: str = Field(
+        default="",
+        description="Supabase service_role secret key for Storage bucket access.",
+    )
+    SUPABASE_STORAGE_BUCKET: str = Field(
+        default="prooflens-documents",
+        description="Supabase Storage bucket name for raw PDF documents.",
+    )
 
     # Active canonical 5-tuple embedding config
     EMBEDDING_PROVIDER: str = "google"
@@ -65,6 +81,19 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def validate_database_url(self) -> "Settings":
+        if not self.DATABASE_URL or not self.DATABASE_URL.strip():
+            if self.ENVIRONMENT == "test":
+                self.DATABASE_URL = "postgresql+asyncpg://postgres:1234@localhost:5432/prooflens"
+            else:
+                raise ValueError(
+                    "DATABASE_URL is not configured. In non-test environments, you must specify "
+                    "a valid Supabase connection URL via DATABASE_URL or .env. "
+                    "Implicit fallback to localhost is disabled for safety."
+                )
+        return self
 
     @property
     def async_database_url(self) -> str:
@@ -112,7 +141,10 @@ class Settings(BaseSettings):
             "database_url": redact_db_url(self.DATABASE_URL),
             "sync_database_url": redact_db_url(self.sync_database_url),
             "is_supabase": self.is_supabase,
+            "storage_backend": self.STORAGE_BACKEND,
             "storage_local_root": self.STORAGE_LOCAL_ROOT,
+            "supabase_storage_bucket": self.SUPABASE_STORAGE_BUCKET,
+            "supabase_service_role_key_configured": bool(self.SUPABASE_SERVICE_ROLE_KEY.strip()),
             "active_embedding_config": self.ACTIVE_EMBEDDING_CONFIG._asdict(),
             "gemini_api_key_configured": bool(self.GEMINI_API_KEY.strip()),
         }
