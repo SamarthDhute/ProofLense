@@ -19,7 +19,7 @@ from backend.app.api.deps import get_storage_service
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Provide an isolated database session with NullPool per test."""
     test_engine = create_async_engine(
-        settings.DATABASE_URL,
+        settings.async_database_url,
         echo=False,
         poolclass=NullPool,
     )

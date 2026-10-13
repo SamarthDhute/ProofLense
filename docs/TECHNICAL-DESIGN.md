@@ -4,7 +4,7 @@
 **Version:** 1.3 — Architecture & Design Baseline (Controlled Revision)  
 **Status:** Under Review (Phase 0 Design Approval Gate)  
 **Target Delivery Horizon:** 2–3 Day Academic / Portfolio Prototype (Planning Constraint, Not Guaranteed SLA)  
-**Primary Tech Stack:** Next.js (TypeScript) + FastAPI (Python 3.11+) + PostgreSQL 16 (pgvector) + Google Gemini API (GenAI SDK)  
+**Primary Tech Stack:** Next.js (TypeScript) + FastAPI (Python 3.11+) + Supabase PostgreSQL 16 (pgvector) + Google Gemini API (GenAI SDK)  
 
 ---
 
@@ -122,8 +122,8 @@ flowchart TB
         CompSvc --> CitVal
     end
 
-    subgraph DataLayer ["Data & Storage Layer (PostgreSQL 16 / Storage)"]
-        DB[(PostgreSQL 16\nRelational Metadata)]
+    subgraph DataLayer ["Data & Storage Layer (Supabase PostgreSQL / Storage)"]
+        DB[(Supabase PostgreSQL\nPrimary Relational Metadata)]
         PGVector[(pgvector Extension\n768-dim HNSW Cosine Index)]
         Storage[(File Storage / Local Dev\nPrivate Original PDFs)]
     end
@@ -147,8 +147,8 @@ flowchart TB
 ### 2. Component Responsibilities and System Boundaries
 *   **Next.js Frontend:** Responsible exclusively for presentation, user interaction, client-side input validation, polling ingestion states, rendering validated structured claims, displaying citation chips, and opening raw evidence inspection drawers. Does not contain business logic, API keys, or direct database connections.
 *   **FastAPI Backend:** Acts as the central orchestrator and security boundary. Validates incoming requests, authenticates workspace capability tokens, enforces workspace isolation across all queries, coordinates PDF ingestion, calls external embedding/LLM APIs, deterministically validates citations server-side, and enforces abstention rules.
-*   **PostgreSQL & pgvector:** Provides relational consistency for workspaces, documents, pages, chunks, and comparisons, combined with indexed approximate nearest neighbor (ANN) vector search.
-*   **Storage Abstraction (`StorageService`):** Manages raw PDF binary persistence. Implemented with a `LocalStorageService` for local dev/testing and `SupabaseStorageService` for cloud deployment.
+*   **Supabase PostgreSQL & pgvector:** Serves as the official primary database. Provides relational consistency for workspaces, documents, pages, chunks, conversations, and comparisons, combined with indexed approximate nearest neighbor (ANN) vector search via native `pgvector` (HNSW cosine). Connected via Session Pooler (port 5432) or direct IPv6 connection with `sslmode=require` and statement cache disabled for pooler compatibility.
+*   **Storage Abstraction (`StorageService`):** Manages raw PDF binary persistence. Implemented with `LocalStorageService` for Phase 1 MVP (path-traversal protection, SHA-256 integrity, local filesystem mount) with cloud blob storage (e.g. Supabase Storage private bucket) scheduled for post-MVP.
 *   **Google Gemini APIs:** Stateless external AI services accessed over HTTPS using the official `google-genai` SDK.
 
 ### 3. End-to-End Data Flow Sequence
@@ -1712,7 +1712,7 @@ A curated 10-case evaluation dataset is committed to version control as a **deve
 | **DR-02** | Embedding Fallback | None (Fallback Deferred) | **DEFERRED** | Former candidate `text-embedding-004` was shut down on January 14, 2026. | Evaluate active alternative embedding models if primary fails. | If primary fails, report service configuration error. | No |
 | **DR-03** | Generation LLM | Google Gemini 2.5 Flash (`gemini-2.5-flash`) | **PROVISIONAL** | 1M token context, native structured JSON support in official docs. | Verify live API key connectivity, structured output schema, and response latency in Phase 4. | Drives Q&A prompt formatting, canonical claim validation, and JSON parsing. | No |
 | **DR-04** | Generation Fallback | None (Fallback Deferred) | **DEFERRED** | Older models (`gemini-2.0-flash`) shut down; fallback candidates require live evaluation. | Verify alternative Flash models if primary experiences quota issues. | Fallback handled via explicit operational error for MVP. | No |
-| **DR-05** | Vector Storage & Index | PostgreSQL 16 with `pgvector` (HNSW index, Cosine Ops) | **VERIFIED** | Official pgvector v0.5.0+ documentation confirms HNSW cosine support up to 2000 dims. | Run Alembic migration in Phase 1. | Unifies relational and vector data in single ACID DB. | No |
+| **DR-05** | Vector Storage & Index | Supabase PostgreSQL 16 with native pgvector (HNSW index, Cosine Ops) | **ADOPTED** | Supabase serves as the official primary database. Native pgvector provides HNSW cosine distance indexing (`<=>`). Session pooler (port 5432) and direct IPv6 connection supported with `sslmode=require` and statement cache disabled for poolers. Local PostgreSQL supported as optional offline dev target. | Inspect target project via `db_inspector`; apply Alembic migrations. | Unifies relational and vector data in single managed PostgreSQL instance. | No |
 | **DR-06** | PDF Text Extraction | PyMuPDF (`fitz`) | **VERIFIED** | C-based extraction preserves page bounding and physical page indices. | Test against sample PDFs in Phase 2. | Powers page-aware extraction pipeline. | No |
 | **DR-07** | Workspace Security | Salted SHA-256 Capability Tokens with Atomic Rotation | **VERIFIED** | Cryptographic token model with constant-time compare and atomic rotation. | Implement security module and tests in Phase 1. | Enforces workspace isolation across all API endpoints. | No |
 | **DR-08** | Ingestion Recovery & Concurrency Lease | Heartbeat Lease (`worker_id`, `processing_heartbeat`) + Startup Sweeper (15-min timeout) + Idempotent Retry | **VERIFIED** | Concurrency lease prevents active job disruption on restart. Sweeper only fails genuinely stale jobs (> 15 min). Provider-aware two-part deletion and orphan discovery preserve safety. | Wire recovery hooks in Phase 2/3; test lease protection and idempotent retry endpoint. | Deterministic crash recovery, lease protection, and idempotent retry trigger. | No |

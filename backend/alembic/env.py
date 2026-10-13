@@ -22,7 +22,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Set database URL dynamically from app settings
-config.set_main_option("sqlalchemy.url", settings.SYNC_DATABASE_URL)
+config.set_main_option("sqlalchemy.url", settings.sync_database_url)
 
 target_metadata = Base.metadata
 
@@ -46,7 +46,7 @@ from sqlalchemy import create_engine, pool
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
     connectable = create_engine(
-        settings.SYNC_DATABASE_URL,
+        settings.sync_database_url,
         poolclass=pool.NullPool,
     )
 

@@ -22,22 +22,20 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     conn = op.get_bind()
 
-    # 1. Attempt enabling extensions
-    has_vector_ext = False
+    # 1. Enable extensions
     try:
         conn.execute(sa.text("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";"))
     except Exception:
         pass
 
     try:
-        ext_check = conn.execute(
-            sa.text("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")
-        ).fetchone()
-        if ext_check:
-            conn.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector;"))
-            has_vector_ext = True
-    except Exception:
-        has_vector_ext = False
+        conn.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector;"))
+    except Exception as exc:
+        raise RuntimeError(
+            "The 'pgvector' PostgreSQL extension is required by ProofLens AI but is not available or could not be enabled. "
+            "In Supabase, ensure the 'vector' extension is enabled in your project (Database -> Extensions -> search 'vector'). "
+            f"Underlying error: {exc}"
+        ) from exc
 
     # 2. Create workspaces table
     op.create_table(
@@ -99,12 +97,6 @@ def upgrade() -> None:
     op.create_index("ix_document_pages_workspace_doc", "document_pages", ["workspace_id", "document_id"])
 
     # 5. Create document_chunks table
-    embedding_col = (
-        sa.Column("embedding", Vector(768), nullable=True)
-        if has_vector_ext
-        else sa.Column("embedding", postgresql.ARRAY(sa.Float()), nullable=True)
-    )
-
     op.create_table(
         "document_chunks",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -113,7 +105,7 @@ def upgrade() -> None:
         sa.Column("page_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("document_pages.id", ondelete="CASCADE"), nullable=False),
         sa.Column("chunk_index", sa.Integer(), nullable=False),
         sa.Column("content", sa.Text(), nullable=False),
-        embedding_col,
+        sa.Column("embedding", Vector(768), nullable=True),
         sa.Column("embedding_provider", sa.String(length=64), nullable=True),
         sa.Column("embedding_model", sa.String(length=64), nullable=True),
         sa.Column("embedding_version", sa.String(length=32), nullable=True),
@@ -133,11 +125,10 @@ def upgrade() -> None:
     op.create_index("ix_document_chunks_page_id", "document_chunks", ["page_id"])
     op.create_index("ix_document_chunks_workspace_doc", "document_chunks", ["workspace_id", "document_id"])
 
-    if has_vector_ext:
-        op.execute(
-            "CREATE INDEX IF NOT EXISTS ix_document_chunks_embedding_hnsw "
-            "ON document_chunks USING hnsw (embedding vector_cosine_ops);"
-        )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_document_chunks_embedding_hnsw "
+        "ON document_chunks USING hnsw (embedding vector_cosine_ops);"
+    )
 
     # 6. Create conversations table
     op.create_table(

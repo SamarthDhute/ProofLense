@@ -1,4 +1,4 @@
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator, Dict
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -10,12 +10,20 @@ class Base(DeclarativeBase):
     pass
 
 
+# Driver-specific connection arguments
+connect_args: Dict[str, Any] = {}
+if "asyncpg" in settings.async_database_url:
+    # Disable prepared statement caching for seamless compatibility with Supabase poolers (Supavisor / PgBouncer)
+    connect_args["statement_cache_size"] = 0
+    connect_args["prepared_statement_cache_size"] = 0
+
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    settings.async_database_url,
     echo=settings.DEBUG,
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
+    connect_args=connect_args,
 )
 
 AsyncSessionLocal = async_sessionmaker(

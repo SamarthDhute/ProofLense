@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
+from backend.app.core.database_url import redact_db_error
 from backend.app.schemas.health import HealthResponse
 
 router = APIRouter(tags=["Health"])
@@ -19,12 +20,16 @@ router = APIRouter(tags=["Health"])
 async def check_health(
     db: AsyncSession = Depends(get_db),
 ):
-    """Verify backend database connectivity, storage writability, and active embedding config."""
+    """Verify application liveness, database connectivity, storage writability, and configuration.
+    
+    Database errors are strictly sanitized to prevent credential and connection string leakage.
+    """
+    liveness_status = "healthy"
     db_status = "healthy"
     try:
         await db.execute(text("SELECT 1"))
-    except Exception as e:
-        db_status = f"unhealthy: {str(e)}"
+    except Exception as exc:
+        db_status = f"unhealthy: {redact_db_error(exc)}"
 
     storage_status = "healthy"
     try:
@@ -34,15 +39,18 @@ async def check_health(
             f.write("ok")
         if os.path.exists(test_path):
             os.remove(test_path)
-    except Exception as e:
-        storage_status = f"unhealthy: {str(e)}"
+    except Exception as exc:
+        storage_status = f"unhealthy: {str(exc)}"
 
-    overall_status = "healthy" if db_status == "healthy" and storage_status == "healthy" else "degraded"
+    overall_status = "healthy" if db_status == "healthy" and storage_status == "healthy" else "unhealthy"
 
     return HealthResponse(
         status=overall_status,
+        liveness=liveness_status,
         database=db_status,
+        database_provider="supabase" if settings.is_supabase else "postgresql",
         storage=storage_status,
+        storage_type="local",
         active_embedding_config=settings.ACTIVE_EMBEDDING_CONFIG._asdict(),
         environment=settings.ENVIRONMENT,
         version="1.0.0",

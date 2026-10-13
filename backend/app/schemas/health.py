@@ -4,8 +4,11 @@ from pydantic import BaseModel, ConfigDict
 
 class HealthResponse(BaseModel):
     status: str
+    liveness: str = "healthy"
     database: str
+    database_provider: str = "postgresql"
     storage: str
+    storage_type: str = "local"
     active_embedding_config: Dict[str, Any]
     environment: str
     version: str = "1.0.0"

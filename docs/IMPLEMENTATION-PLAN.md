@@ -100,7 +100,7 @@ The prototype timeline of 2–3 days is treated as a **planning constraint**, no
 ---
 
 ### Phase 1 — Backend Foundation & Workspace Security
-*   **Objective:** Scaffold the backend (FastAPI) project skeleton, establish async database connection with PostgreSQL 16 and pgvector, apply initial Alembic migrations with composite foreign keys and concurrency lease columns (`processing_heartbeat`, `worker_id`), implement capability-token workspace security with atomic token rotation, enforce static environment and credential validation (without live external network probes), and build health probes.
+*   **Objective:** Scaffold the backend (FastAPI) project skeleton, establish async database connection with Supabase PostgreSQL (pgvector) as official primary database, apply initial Alembic migrations with composite foreign keys and concurrency lease columns (`processing_heartbeat`, `worker_id`), implement capability-token workspace security with atomic token rotation, enforce static environment and credential validation (without live external network probes), and build health probes.
 *   **Backend-First Implementation Strategy:**
     *   Phase 1 focuses **exclusively on the backend foundation**.
     *   Next.js scaffolding and frontend implementation are **deferred to Phase 5** until the core backend workflow, RAG pipeline, and API contracts are fully verified with automated tests.
@@ -108,7 +108,7 @@ The prototype timeline of 2–3 days is treated as a **planning constraint**, no
 *   **Scope:**
     *   FastAPI application structure with Pydantic v2 settings.
     *   Static configuration validation: `DATABASE_URL`, `GEMINI_API_KEY`, `EMBEDDING_MODEL`, `LLM_MODEL`. Verifying non-empty credential strings without leaking secrets.
-    *   Async SQLAlchemy 2.0 connection to PostgreSQL via `asyncpg` and `pgvector` extension verification.
+    *   Async SQLAlchemy 2.0 connection to Supabase PostgreSQL via `asyncpg` (with pooler statement cache disabled) and `pgvector` extension verification.
     *   Alembic migration scripts creating initial database schema:
         *   `workspaces` (with `token_hash` and `token_salt`)
         *   `documents` (with composite unique constraint on `(id, workspace_id)`, `deletion_attempts`, `deletion_error`, `processing_heartbeat`, `worker_id`, `is_corpus_excluded`, `corpus_exclusion_reason`, and `corpus_excluded_at`)
@@ -121,7 +121,7 @@ The prototype timeline of 2–3 days is treated as a **planning constraint**, no
     *   Liveness (`/health/live`) and readiness (`/health/ready`) endpoints.
     *   Pytest test harness with `conftest.py`.
 *   **Explicit Exclusions:** Document parsing, live vector embedding API calls, external LLM network calls, and Next.js / frontend UI scaffolding (deferred to Phase 5).
-*   **Dependencies & Prerequisites:** Phase 0 approval; local PostgreSQL 16 instance with pgvector or Supabase connection string.
+*   **Dependencies & Prerequisites:** Phase 0 approval; Supabase PostgreSQL 16 project with pgvector (or local PostgreSQL development instance).
 *   **Tasks in Execution Order:**
     1.  *Task 1.1:* Initialize Python virtual environment and configure backend dependencies in `backend/requirements.txt` (`fastapi`, `uvicorn`, `sqlalchemy[asyncio]`, `asyncpg`, `pgvector`, `alembic`, `pydantic-settings`, `pymupdf`, `google-genai`, `tenacity`, `pytest`, `httpx`).
     2.  *Task 1.2:* Build core configuration module (`backend/app/core/config.py`) loading and validating environment variables (`DATABASE_URL`, `GEMINI_API_KEY`, `EMBEDDING_MODEL`, `LLM_MODEL`, `STORAGE_BACKEND`, `RETRIEVAL_SIMILARITY_THRESHOLD`). Verify credential presence (non-empty string check; logging format: `GEMINI_API_KEY: SET (len=39)`). Ensure zero live network calls occur during config initialization.
