@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     # Operational limits
     MAX_DOCUMENT_SIZE_MB: int = 50
     INGESTION_LEASE_TIMEOUT_SECONDS: int = 900  # 15 minutes
+    CHUNK_TARGET_SIZE_CHARS: int = 1000
+    CHUNK_MAX_SIZE_CHARS: int = 1500
+    CHUNK_OVERLAP_CHARS: int = 200
+    MAX_EXTRACTION_PAGES: int = 1000
+    MAX_PROCESSING_RETRIES: int = 3
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -93,6 +98,29 @@ class Settings(BaseSettings):
                     "a valid Supabase connection URL via DATABASE_URL or .env. "
                     "Implicit fallback to localhost is disabled for safety."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def validate_storage_configuration(self) -> "Settings":
+        if self.STORAGE_BACKEND == "supabase":
+            if not self.SUPABASE_SERVICE_ROLE_KEY or not self.SUPABASE_SERVICE_ROLE_KEY.strip():
+                if self.ENVIRONMENT not in ("test",):
+                    raise ValueError(
+                        "SUPABASE_SERVICE_ROLE_KEY must be configured when STORAGE_BACKEND='supabase' "
+                        "in non-test environments. Silent fallback to local storage is prohibited."
+                    )
+            if not self.SUPABASE_URL or not self.SUPABASE_URL.strip():
+                if self.ENVIRONMENT not in ("test",):
+                    raise ValueError(
+                        "SUPABASE_URL must be configured when STORAGE_BACKEND='supabase'."
+                    )
+        elif self.STORAGE_BACKEND == "local":
+            # Explicit local mode permitted for development and testing
+            pass
+        else:
+            raise ValueError(
+                f"Invalid STORAGE_BACKEND '{self.STORAGE_BACKEND}'. Must be 'supabase' or 'local'."
+            )
         return self
 
     @property

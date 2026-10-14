@@ -54,6 +54,17 @@ class WorkspaceService:
         return None
 
     @staticmethod
+    async def get_workspace_by_token(
+        db: AsyncSession, raw_token: str
+    ) -> Optional[Workspace]:
+        """Resolve workspace from raw capability token by checking SHA-256 hash."""
+        token_hash = hash_capability_token(raw_token)
+        result = await db.execute(
+            select(Workspace).where(Workspace.capability_token_hash == token_hash)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
     async def rotate_token(
         db: AsyncSession, workspace: Workspace
     ) -> str:

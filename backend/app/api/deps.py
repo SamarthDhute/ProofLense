@@ -19,12 +19,20 @@ def get_storage_service() -> StorageService:
     """Dependency provider for storage service singleton."""
     global _storage_instance
     if _storage_instance is None:
-        if settings.STORAGE_BACKEND == "supabase" and settings.SUPABASE_SERVICE_ROLE_KEY:
-            _storage_instance = SupabaseStorageService(
-                supabase_url=settings.SUPABASE_URL,
-                service_role_key=settings.SUPABASE_SERVICE_ROLE_KEY,
-                bucket=settings.SUPABASE_STORAGE_BUCKET,
-            )
+        if settings.STORAGE_BACKEND == "supabase":
+            if settings.SUPABASE_SERVICE_ROLE_KEY and settings.SUPABASE_SERVICE_ROLE_KEY.strip():
+                _storage_instance = SupabaseStorageService(
+                    supabase_url=settings.SUPABASE_URL,
+                    service_role_key=settings.SUPABASE_SERVICE_ROLE_KEY,
+                    bucket=settings.SUPABASE_STORAGE_BUCKET,
+                )
+            elif settings.ENVIRONMENT == "test":
+                _storage_instance = LocalStorageService(settings.STORAGE_LOCAL_ROOT)
+            else:
+                raise RuntimeError(
+                    "STORAGE_BACKEND is set to 'supabase' but SUPABASE_SERVICE_ROLE_KEY is missing. "
+                    "Silent fallback to local storage is blocked for production safety."
+                )
         else:
             _storage_instance = LocalStorageService(settings.STORAGE_LOCAL_ROOT)
     return _storage_instance
@@ -67,6 +75,35 @@ async def get_current_workspace(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid or revoked capability token for this workspace.",
+        )
+
+    return workspace
+
+
+async def get_authenticated_workspace(
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db),
+) -> Workspace:
+    """Derive workspace principal strictly from Bearer capability token."""
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing Authorization header. Bearer capability token required.",
+        )
+
+    parts = authorization.strip().split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Authorization header format. Expected: 'Bearer <token>'.",
+        )
+
+    raw_token = parts[1]
+    workspace = await WorkspaceService.get_workspace_by_token(db, raw_token)
+    if not workspace:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or revoked capability token.",
         )
 
     return workspace

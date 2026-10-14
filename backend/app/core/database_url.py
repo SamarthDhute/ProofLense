@@ -8,23 +8,25 @@ def redact_db_url(url: str) -> str:
     if not url:
         return ""
     try:
-        # Match scheme://[user[:pass]@]host[:port]/[path][?query]
-        # Regex captures: 1=scheme, 2=user, 3=password, 4=host, 5=rest
-        pattern = r"^([a-zA-Z0-9+_]+://)(?:([^:@]+)(?::([^@]*))?@)?(\[[^\]]+\]|[^:/?#]+)(.*)$"
-        match = re.match(pattern, url)
-        if match:
-            scheme, user, password, host, rest = match.groups()
-            user_part = user or ""
-            if password:
-                return f"{scheme}{user_part}:***@{host}{rest}"
-            elif user:
-                return f"{scheme}{user_part}@{host}{rest}"
-            else:
-                return f"{scheme}{host}{rest}"
+        parsed = parse_db_url(url)
+        scheme = parsed["scheme"]
+        user = parsed["user"]
+        has_pass = bool(parsed["password"])
+        host = parsed["host"]
+        port_part = f":{parsed['port']}" if parsed["port"] else ""
+        dbname_part = f"/{parsed['dbname']}" if parsed["dbname"] else ""
+        query_part = f"?{urllib.parse.urlencode(parsed['query_params'])}" if parsed["query_params"] else ""
+
+        auth = ""
+        if user and has_pass:
+            auth = f"{user}:***@"
+        elif user:
+            auth = f"{user}@"
+
+        return f"{scheme}://{auth}{host}{port_part}{dbname_part}{query_part}"
+    except Exception:
         # Fallback regex replacing password between colon and @
         return re.sub(r":([^/@:]+)@", ":***@", url)
-    except Exception:
-        return "[REDACTED_DATABASE_URL]"
 
 
 def redact_db_error(error: Any) -> str:

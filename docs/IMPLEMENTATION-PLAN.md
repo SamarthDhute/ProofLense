@@ -100,6 +100,7 @@ The prototype timeline of 2–3 days is treated as a **planning constraint**, no
 ---
 
 ### Phase 1 — Backend Foundation & Workspace Security
+*   **Status:** **COMPLETED & FROZEN** (Verified on Supabase PostgreSQL + pgvector + Supabase Cloud Storage)
 *   **Objective:** Scaffold the backend (FastAPI) project skeleton, establish async database connection with Supabase PostgreSQL (pgvector) as official primary database, apply initial Alembic migrations with composite foreign keys and concurrency lease columns (`processing_heartbeat`, `worker_id`), implement capability-token workspace security with atomic token rotation, enforce static environment and credential validation (without live external network probes), and build health probes.
 *   **Backend-First Implementation Strategy:**
     *   Phase 1 focuses **exclusively on the backend foundation**.
@@ -120,6 +121,7 @@ The prototype timeline of 2–3 days is treated as a **planning constraint**, no
     *   Atomic token rotation endpoint (`POST /api/v1/workspaces/{id}/tokens/rotate`) with workspace mismatch rejection and immediate old token invalidation.
     *   Liveness (`/health/live`) and readiness (`/health/ready`) endpoints.
     *   Pytest test harness with `conftest.py`.
+    *   Storage abstraction (`StorageService`): `SupabaseStorageService` (private bucket `prooflens-documents`, signed URLs, atomic SHA-256 uploads) and `LocalStorageService` (path traversal protection, offline dev/test fallback).
 *   **Explicit Exclusions:** Document parsing, live vector embedding API calls, external LLM network calls, and Next.js / frontend UI scaffolding (deferred to Phase 5).
 *   **Dependencies & Prerequisites:** Phase 0 approval; Supabase PostgreSQL 16 project with pgvector (or local PostgreSQL development instance).
 *   **Tasks in Execution Order:**
@@ -131,114 +133,74 @@ The prototype timeline of 2–3 days is treated as a **planning constraint**, no
     6.  *Task 1.6:* Configure Alembic (`alembic.ini`, `alembic/env.py`) and author initial migration creating tables, composite constraints, concurrency lease columns, document exclusion audit columns, and the pgvector HNSW index (`vector_cosine_ops`).
     7.  *Task 1.7:* Implement workspace creation endpoint (`POST /api/v1/workspaces`) returning raw token once, and token rotation endpoint (`POST /api/v1/workspaces/{id}/tokens/rotate`).
     8.  *Task 1.8:* Implement health check routes (`backend/app/api/v1/health.py`) and global error handler middleware.
-    9.  *Task 1.9:* Set up pytest testing framework (`backend/tests/conftest.py`) and write tests covering:
-        *   Static configuration validation and credential presence (verifying non-empty key detection and secret masking in logs).
-        *   Health probes (`/health/live`, `/health/ready`).
-        *   Token generation and salted verification.
-        *   Token rotation: valid rotation, workspace mismatch rejection (`401`), invalid token rejection (`401`), and immediate rejection on reuse of rotated old token (`401`).
-        *   Logging sanitization verification (verifying logs do not contain raw tokens or API keys).
-*   **Expected Files to Implement:**
+    9.  *Task 1.9:* Implement storage services: `SupabaseStorageService` (`backend/app/storage/supabase.py`) and `LocalStorageService` (`backend/app/storage/local.py`).
+    10. *Task 1.10:* Set up pytest testing framework (`backend/tests/conftest.py`) and write tests covering configuration validation, database URL normalization, health probes, token authentication and isolation, storage CRUD and traversal prevention.
+*   **Expected Files Implemented:**
     *   `backend/requirements.txt`, `backend/alembic.ini`
-    *   `backend/app/main.py`, `backend/app/core/config.py`, `backend/app/core/security.py`, `backend/app/core/errors.py`
-    *   `backend/app/db/session.py`, `backend/app/db/base.py`
-    *   `backend/app/models/*.py`, `backend/alembic/versions/*_initial_schema.py`
+    *   `backend/app/main.py`, `backend/app/core/config.py`, `backend/app/core/database.py`, `backend/app/core/database_url.py`, `backend/app/core/db_inspector.py`
+    *   `backend/app/models/*.py`, `backend/alembic/versions/001_initial_schema.py`
     *   `backend/app/api/v1/health.py`, `backend/app/api/v1/workspaces.py`, `backend/app/api/deps.py`
-    *   `backend/tests/unit/test_security.py`, `backend/tests/unit/test_config.py`, `backend/tests/integration/test_health.py`
+    *   `backend/app/storage/base.py`, `backend/app/storage/local.py`, `backend/app/storage/supabase.py`
+    *   `backend/tests/test_database_config.py`, `backend/tests/test_embedding_provider.py`, `backend/tests/test_health.py`, `backend/tests/test_storage.py`, `backend/tests/test_workspaces.py`
 *   **Acceptance Criteria:**
-    *   Backend starts cleanly via `uvicorn app.main:app` without attempting external Gemini API calls.
+    *   Backend starts cleanly via `uvicorn backend.app.main:app` without attempting external Gemini API calls.
     *   Static configuration validation confirms `GEMINI_API_KEY` presence without logging secret values.
-    *   `GET /api/v1/health/live` returns HTTP 200 `{"status": "healthy"}`.
-    *   `GET /api/v1/health/ready` validates database connectivity and pgvector extension availability.
+    *   `GET /api/v1/health` returns HTTP 200 with database provider (`supabase`), storage type (`supabase`), and canonical embedding 5-tuple.
     *   Alembic migration runs successfully (`alembic upgrade head`) creating tables with composite FKs and lease columns (`processing_heartbeat`, `worker_id`).
-    *   Creating a workspace returns raw token `plk_live_...`; database stores only salted hash.
+    *   Creating a workspace returns raw token; database stores only salted hash.
     *   Requesting workspace without valid token returns `401 Unauthorized`.
     *   Client-supplied workspace ID in path cannot override token authorization scope (mismatched tokens return `401 Unauthorized`).
     *   Token rotation immediately invalidates the old token; subsequent requests presenting old token return `401 Unauthorized`.
     *   Raw capability tokens and API keys never appear in application logs or error response bodies.
-*   **Tests & Verification Commands:**
-    ```bash
-    cd backend && pytest tests/unit/test_security.py tests/unit/test_config.py tests/integration/test_health.py -v
-    cd backend && alembic upgrade head
-    ```
-*   **Risks & Failure Conditions:** Missing `pgvector` extension; database migration failure.
-*   **Definition of Done (DoD):** Backend starts cleanly; database migrations apply; health probes pass; static config validation passes without network calls; token authentication and rotation security tests pass 100%.
+*   **Verification Record (Phase 1 Freeze Checkpoint):**
+    *   **Automated Tests:** 29 / 29 passed (`pytest -v`, 29.60s execution time, 100% pass rate).
+    *   **Database:** Supabase PostgreSQL 17.11 connected via Session Pooler (`aws-0-ap-southeast-1.pooler.supabase.com:5432`); `pgvector` extension installed; 9 canonical tables created.
+    *   **Storage:** Supabase Storage private bucket `prooflens-documents` verified with `SupabaseStorageService` (CRUD and signed URLs operational).
+    *   **Alembic Revision:** `001_initial_schema` (`ALREADY_MIGRATED`).
+*   **Definition of Done (DoD):** Backend foundation, workspace security, Supabase database, pgvector, Supabase Storage, and health probes 100% verified with automated tests. Phase 1 is frozen and ready for Phase 2.
 
 ---
 
 ### Phase 2 — PDF Ingestion
+*   **Status:** **COMPLETE & VERIFIED (62/62 Automated Tests Passing)**
 *   **Objective:** Implement secure PDF upload, private file storage, page-aware text extraction using PyMuPDF, sentence-snapped chunking within page boundaries, document processing state tracking with database concurrency leases (`worker_id`, `processing_heartbeat`), safe startup recovery protecting active jobs, idempotent retries, provider-aware durable deletion, and orphan reconciliation.
 *   **Canonical Ingestion Lifecycle Alignment:**
-    *   The canonical state machine is: $\text{PENDING} \rightarrow \text{EXTRACTING} \rightarrow \text{CHUNKING} \rightarrow \text{EMBEDDING} \rightarrow \text{COMPLETED}$.
-    *   In Phase 2, the pipeline executes extraction and chunking: $\text{PENDING} \rightarrow \text{EXTRACTING} \rightarrow \text{CHUNKING}$.
-    *   **Crucial Invariant:** A document **cannot become `COMPLETED` in Phase 2**. It reaches `COMPLETED` only in Phase 3 after vector embedding generation and persistence succeed.
-*   **Scope:**
-    *   File validation: MIME type (`application/pdf`), size ($\le 10$ MB), magic bytes (`%PDF-`), and duplicate SHA-256 hash detection per workspace.
-    *   Storage abstraction (`StorageService`): `LocalStorageService` for dev, `SupabaseStorageService` ready.
-    *   PyMuPDF extraction engine: Page-by-page text extraction, 1-based physical page numbering preservation.
-    *   Scanned PDF heuristic detection: Flagging files with $\text{avg\_chars} < 50$ across pages as `SCANNED_PDF_UNSUPPORTED` without failing silently.
-    *   Sliding-window text chunker (1,000 characters, 200 overlap, sentence snapping strictly within page boundaries).
-    *   Idempotent chunk generation: Any previous chunks for the document are removed before persisting new chunks.
-    *   Concurrency Lease & Safe Startup Recovery (Fix 4):
-        *   Single-instance MVP deployment assumption documented.
-        *   Database-backed lease model: Worker claims document by setting `worker_id = "<hostname>:<pid>"` and `processing_heartbeat = NOW()`.
-        *   Two-tier heartbeat strategy: In addition to updates at macro stage boundaries, workers run an asynchronous keep-alive loop pulsing `processing_heartbeat = NOW()` every 60 seconds (`HEARTBEAT_INTERVAL_SECONDS = 60`), plus progress pulses every 10 pages extracted in PyMuPDF. This completely prevents long-running stages (e.g., 200-page extractions taking $> 15$ min) from being falsely marked stale.
-        *   Conditional lease matching: All heartbeat pulses and stage transitions verify `WHERE id = :id AND worker_id = :worker_id AND status = :current_status`, preventing split-brain writes if a lease was reassigned.
-        *   Startup sweeper resolves stale jobs safely: Only marks jobs as `FAILED` if `processing_heartbeat < NOW() - INTERVAL '15 minutes'`. In-flight jobs owned by an active worker with recent heartbeats are never disrupted on server restart.
-        *   Idempotent retry endpoint: `POST /api/v1/workspaces/{id}/documents/{doc_id}/retry` resets `FAILED` documents to `PENDING`, clears partial chunks, and re-triggers background processing safely.
-        *   *Separation of Normal Ingestion Retry vs. Re-Embedding Recovery:* Normal ingestion retry targets initial ingestion failures (`status = 'FAILED'`), clearing partial DB chunks and re-running extraction from raw PDF. Re-embedding recovery (Phase 3) targets already-`COMPLETED` documents, preserving existing valid chunks throughout computation until an atomic SQL transaction replaces them.
-        *   *Intentional Document Exclusion Endpoint:* `POST /api/v1/workspaces/{id}/documents/{doc_id}/exclude` requires a non-empty `exclusion_reason` ($\ge 10$ chars), sets `is_corpus_excluded = TRUE`, records `corpus_exclusion_reason` and `corpus_excluded_at = NOW()`, audits the operation, and immediately omits the document from active retrieval gate verification.
-    *   Storage-Provider-Aware Durable Deletion & Orphan Reconciliation (Fix 3):
-        *   *Pending Deletion Sweeper (Database-Driven):* Mark `DELETING` $\rightarrow$ Storage delete (idempotent 404 handling) $\rightarrow$ DB cascading delete; retry metadata tracking (`deletion_attempts`, `deletion_error`). If `deletion_attempts >= 5`, alert operator and preserve `DELETING` row.
-        *   *Historical Citation Deletion Marking:* When a document is deleted, the service updates historical conversation records (`messages` table) belonging to the workspace, setting `"document_deleted": true` on all citation objects referencing `doc_id`. This preserves conversation history and claim audits while signaling to the UI that the document was removed.
-        *   *Storage Orphan Discovery (Storage-Driven):* Audits storage objects against `documents.storage_path`. Enforces a strict 2-hour safety grace period (`file.last_modified < NOW() - 2 hours`) to prevent race conditions with active uploads.
-        *   *Provider-Specific Orphan Action:* For local storage, unreferenced files are moved to `storage/orphans/`. For Supabase Cloud Storage, candidate orphans are discovered and emitted as an `OrphanAuditReport` for operator review—**never automatically deleting unverified cloud objects**.
-    *   Document listing, status polling, retry endpoint, exclusion endpoint, and deletion endpoints.
-*   **Explicit Exclusions:** Vector embedding generation and Phase 3 `EMBEDDING` recovery (deferred to Phase 3).
-*   **Dependencies & Prerequisites:** Phase 1 database schema and workspace authorization.
-*   **Tasks in Execution Order:**
-    1.  *Task 2.1:* Implement storage abstraction (`backend/app/services/storage_service.py`) supporting local disk and Supabase Storage, implementing provider-aware orphan discovery with a strict 2-hour safety grace period (local quarantine vs cloud audit report).
-    2.  *Task 2.2:* Build PDF extraction service (`backend/app/services/pdf_extractor.py`) using PyMuPDF (`fitz`), handling encryption checks, page character counts, and scanned heuristic detection.
-    3.  *Task 2.3:* Implement page-aware text chunking service (`backend/app/services/chunking_service.py`) ensuring chunk boundaries do not cross page breaks.
-    4.  *Task 2.4:* Build document repository (`backend/app/repositories/document_repo.py`) for CRUD operations on documents, pages, and chunks with composite foreign key integrity and lease management (`worker_id`, `processing_heartbeat`).
-    5.  *Task 2.5:* Implement document orchestration service (`backend/app/services/document_service.py`) managing ingestion transitions (`PENDING → EXTRACTING → CHUNKING`), background worker execution with 60-second keep-alive heartbeat loop, conditional lease updates, safe startup recovery (sweeping only jobs with `processing_heartbeat < NOW() - 15 minutes` to `FAILED`), and normal ingestion retry (`POST /api/v1/workspaces/{id}/documents/{doc_id}/retry`) resetting state and re-queueing.
-    6.  *Task 2.6:* Implement the durable deletion workflow in `document_service.py` (status `DELETING`, storage delete with retry backoff, database cascade delete, historical citation deletion marking updating `messages.citations` with `document_deleted: true`, startup pending-deletion sweeper with retry exhaustion limits, and provider-aware storage orphan audit).
-    7.  *Task 2.7:* Create document API routes (`backend/app/api/v1/documents.py`):
-        *   `POST /api/v1/workspaces/{id}/documents/upload`
-        *   `GET /api/v1/workspaces/{id}/documents`
-        *   `GET /api/v1/workspaces/{id}/documents/{doc_id}/status`
-        *   `POST /api/v1/workspaces/{id}/documents/{doc_id}/retry`
-        *   `POST /api/v1/workspaces/{id}/documents/{doc_id}/exclude`
-        *   `DELETE /api/v1/workspaces/{id}/documents/{doc_id}`
-    8.  *Task 2.8:* Write automated unit and integration tests covering extraction, chunking, status polling, scanned rejection, duplicate upload rejection, deletion cleanup, historical citation deletion marking (`test_document_deletion_marks_historical_citations_deleted`), document exclusion auditing (`test_document_exclusion_audits_and_omits_from_corpus_gate`), lease protection on restart (active jobs NOT failed), continuous keep-alive preventing false timeout on long jobs (> 15 min), startup recovery of genuinely stale jobs (> 15 min), idempotent retry execution, and provider-aware orphan file discovery.
-*   **Expected Files to Implement:**
-    *   `backend/app/services/storage_service.py`
-    *   `backend/app/services/pdf_extractor.py`
-    *   `backend/app/services/chunking_service.py`
-    *   `backend/app/services/document_service.py`
-    *   `backend/app/repositories/document_repo.py`
-    *   `backend/app/schemas/document.py`
-    *   `backend/app/api/v1/documents.py`
-    *   `backend/tests/unit/test_pdf_extractor.py`, `backend/tests/unit/test_chunking.py`, `backend/tests/integration/test_document_api.py`, `backend/tests/integration/test_recovery.py`
-*   **Acceptance Criteria:**
-    *   Uploading a valid text PDF returns HTTP 202; background processing extracts pages and generates chunk rows in database.
-    *   Physical page numbers in `document_pages` match 1-based page indices in the original PDF.
-    *   Attempting to insert a chunk with a `page_id` from another document triggers a database foreign key constraint violation.
-    *   Uploading a scanned image PDF results in status `FAILED` with explicit error code `SCANNED_PDF_UNSUPPORTED`.
-    *   Deleting a document marks it `DELETING`, removes the physical file, cascades removal of all associated pages and chunks from PostgreSQL, and flags matching historical citations with `document_deleted: true`.
-    *   Calling delete on a document whose physical file was already removed succeeds idempotently.
-    *   Failed storage deletions leave durable `deletion_attempts` and `deletion_error` metadata; retry exhaustion at 5 attempts preserves the record in `DELETING` and raises an operational alert.
-    *   Document exclusion endpoint `POST /api/v1/workspaces/{id}/documents/{doc_id}/exclude` requires valid reason ($\ge 10$ chars), records audit metadata (`is_corpus_excluded = TRUE`, `corpus_exclusion_reason`, `corpus_excluded_at`), and omits the document from active corpus verification.
-    *   Server restart verifies active worker leases: Jobs with recent heartbeats ($< 15$ min) remain active; only genuinely stale jobs without active heartbeat are marked `FAILED`.
-    *   Long-running extraction/chunking jobs continually pulse heartbeats every 60 seconds and are never prematurely failed by the startup sweeper.
-    *   Retrying a `FAILED` document via `POST /api/v1/workspaces/{id}/documents/{doc_id}/retry` resets status to `PENDING` and re-processes cleanly without generating duplicate chunks.
-    *   Orphan file reconciliation identifies unreferenced files older than 2 hours; local storage moves to `storage/orphans/`; cloud storage generates `OrphanAuditReport` without destructive deletion. Files inside the 2-hour grace period are never touched.
-*   **Tests & Verification Commands:**
-    ```bash
-    cd backend && pytest tests/unit/test_pdf_extractor.py tests/unit/test_chunking.py -v
-    cd backend && pytest tests/integration/test_document_api.py tests/integration/test_recovery.py -v
+    *   The canonical state machine is: $\text{PENDING} \rightarrow \text{EXTRACTING} \rightarrow \text{CHUNKING} \rightarrow \text{READY}$ (Phase 2), with Phase 3 extending to $\text{EMBEDDING} \rightarrow \text{COMPLETED}$.
+    *   In Phase 2, the pipeline executes extraction and chunking: $\text{PENDING} \rightarrow \text{EXTRACTING} \rightarrow \text{CHUNKING} \rightarrow \text{READY}$.
+    *   **Crucial Invariant:** Vector embeddings are NOT populated during Phase 2 (768-dim `embedding` column remains `NULL`). Phase 3 will generate Gemini embeddings and transition documents to `COMPLETED`.
+*   **Scope & Implemented Features:**
+    *   File validation: MIME type (`application/pdf`), size ($\le 50$ MB), magic bytes (`%PDF-`), PyMuPDF parseability, unencrypted checks, and duplicate SHA-256 hash detection per workspace (`409 Conflict`).
+    *   Storage abstraction (`StorageService`): Active Supabase Storage (`prooflens-documents`) with explicit `LocalStorageService` dev/test fallback.
+    *   PyMuPDF extraction engine (`PDFExtractor`): Page-by-page text extraction, 1-based physical page numbering, line ending normalization, and scanned PDF heuristic detection (`SCANNED_PDF_UNSUPPORTED`).
+    *   Sentence-aware text chunker (`TextChunker`): Sentence boundary snapping, configurable target (1000 chars) and max (1500 chars) lengths, sentence overlap (200 chars), long sentence subdivision, character offset tracking (`char_start`, `char_end`), stable chunk index ordering, and empty page handling.
+    *   Document Service (`DocumentService`): Atomic file upload, DB registration with compensating storage cleanup, page persistence, chunk persistence without fake embeddings, document listing with pagination, and status retrieval.
+    *   Durable Deletion (`DocumentService.delete_document`): Idempotent deletion, `DELETING` status marker, storage object removal with retry tracking (`deletion_attempts`, `deletion_error`), database cascade deletion of pages and chunks, and historical citation marking (`document_deleted: true`).
+    *   Interrupted-Job Recovery & Retries (`RecoveryService`): Automated recovery sweeper detecting crashed/orphaned jobs exceeding the 15-minute lease grace period (`INGESTION_LEASE_TIMEOUT_SECONDS = 900`), scalar-attribute loading avoiding async greenlet errors, and bounded retry policy.
+    *   REST APIs (`backend/app/api/v1/documents.py`):
+        *   `POST /api/v1/documents`
+        *   `GET /api/v1/documents`
+        *   `GET /api/v1/documents/{document_id}`
+        *   `DELETE /api/v1/documents/{document_id}`
+        *   `POST /api/v1/documents/{document_id}/retry`
+        *   `POST /api/v1/documents/recovery/stale-jobs`
+*   **Implemented Deliverables:**
+    *   `backend/app/services/pdf_extractor.py` (PyMuPDF deterministic extractor)
+    *   `backend/app/services/text_chunker.py` (Sentence-aware text chunker)
+    *   `backend/app/services/document_service.py` (Ingestion, listing, status, durable deletion)
+    *   `backend/app/services/recovery_service.py` (Interrupted-job recovery sweeper)
+    *   `backend/app/schemas/document.py` (Pydantic models for upload, list, detail, delete, recovery)
+    *   `backend/app/api/v1/documents.py` (Document endpoints with workspace token auth)
+    *   `backend/tests/test_pdf_extractor.py` (9 unit tests)
+    *   `backend/tests/test_text_chunker.py` (7 unit tests)
+    *   `backend/tests/test_document_ingestion.py` (10 integration tests)
+    *   `backend/tests/test_document_deletion.py` (3 integration tests)
+    *   `backend/tests/test_document_recovery.py` (4 integration tests)
+*   **Verification Evidence & Actual Test Results:**
+    ```powershell
+    $env:PYTHONPATH="e:\ProofLense"; ..\.venv\Scripts\pytest.exe -v
     ```
-*   **Risks & Failure Conditions:** Incomplete file cleanup on partial extraction crashes; memory leaks on large PDFs.
-*   **Definition of Done (DoD):** Document upload, PyMuPDF extraction, page-aware chunking, status transitions, durable deletion with citation marking, exclusion auditing, heartbeat lease protection, safe startup recovery, and provider-aware orphan handling verified with passing automated tests.
+    *Result:* **66 passed in 154.02s** (29 Phase 1 regression tests + 37 Phase 2 tests, 0 failures, 0 skipped).
+*   **Definition of Done (DoD):** Document upload, PyMuPDF extraction, sentence-aware chunking, status transitions, durable deletion with citation marking, heartbeat lease recovery, and workspace tenant isolation 100% verified with passing automated tests. Phase 2 is complete.
 
 ---
 

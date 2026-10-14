@@ -64,6 +64,35 @@ async def test_path_traversal_prevention(temp_storage: LocalStorageService):
         await temp_storage.get_file_bytes("..\\..\\windows\\system32\\cmd.exe")
 
 
+def test_missing_supabase_storage_credentials_in_production_fails():
+    """Verify application fails closed if STORAGE_BACKEND is supabase but credentials are missing."""
+    from backend.app.core.config import Settings
+
+    with pytest.raises(ValueError, match="SUPABASE_SERVICE_ROLE_KEY must be configured"):
+        Settings(
+            ENVIRONMENT="production",
+            DATABASE_URL="postgresql://user:pass@host/db",
+            STORAGE_BACKEND="supabase",
+            SUPABASE_SERVICE_ROLE_KEY="",
+            _env_file=None,
+        )
+
+
+def test_explicit_local_storage_mode_permitted():
+    """Verify STORAGE_BACKEND='local' is explicitly permitted without Supabase keys."""
+    from backend.app.core.config import Settings
+
+    dev_settings = Settings(
+        ENVIRONMENT="development",
+        DATABASE_URL="postgresql://user:pass@host/db",
+        STORAGE_BACKEND="local",
+        SUPABASE_SERVICE_ROLE_KEY="",
+        _env_file=None,
+    )
+    assert dev_settings.STORAGE_BACKEND == "local"
+
+
+
 @pytest.mark.asyncio
 async def test_supabase_storage_path_sanitization():
     """Verify SupabaseStorageService enforces path security and blocks traversal."""
@@ -133,7 +162,16 @@ async def test_supabase_storage_live_if_configured():
     deleted = await service.delete_file(path)
     assert deleted is True
 
-    # 5. Verify deletion
-    with pytest.raises(FileNotFoundError):
-        await service.get_file_bytes(path)
+    # 5. Verify deletion (with retry for cloud storage propagation delay)
+    deleted_verified = False
+    import asyncio
+    for _ in range(8):
+        try:
+            await service.get_file_bytes(path)
+            await asyncio.sleep(0.3)
+        except FileNotFoundError:
+            deleted_verified = True
+            break
+
+    assert deleted_verified is True
 

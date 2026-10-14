@@ -148,7 +148,7 @@ flowchart TB
 *   **Next.js Frontend:** Responsible exclusively for presentation, user interaction, client-side input validation, polling ingestion states, rendering validated structured claims, displaying citation chips, and opening raw evidence inspection drawers. Does not contain business logic, API keys, or direct database connections.
 *   **FastAPI Backend:** Acts as the central orchestrator and security boundary. Validates incoming requests, authenticates workspace capability tokens, enforces workspace isolation across all queries, coordinates PDF ingestion, calls external embedding/LLM APIs, deterministically validates citations server-side, and enforces abstention rules.
 *   **Supabase PostgreSQL & pgvector:** Serves as the official primary database. Provides relational consistency for workspaces, documents, pages, chunks, conversations, and comparisons, combined with indexed approximate nearest neighbor (ANN) vector search via native `pgvector` (HNSW cosine). Connected via Session Pooler (port 5432) or direct IPv6 connection with `sslmode=require` and statement cache disabled for pooler compatibility.
-*   **Storage Abstraction (`StorageService`):** Manages raw PDF binary persistence. Implemented with `LocalStorageService` for Phase 1 MVP (path-traversal protection, SHA-256 integrity, local filesystem mount) with cloud blob storage (e.g. Supabase Storage private bucket) scheduled for post-MVP.
+*   **Storage Abstraction (`StorageService`):** Manages raw PDF binary persistence. Implemented with `SupabaseStorageService` (private bucket `prooflens-documents`, signed URLs, atomic SHA-256 uploads) as the official cloud storage backend, and `LocalStorageService` (path-traversal protection, SHA-256 integrity, local filesystem mount) for offline development and isolated testing.
 *   **Google Gemini APIs:** Stateless external AI services accessed over HTTPS using the official `google-genai` SDK.
 
 ### 3. End-to-End Data Flow Sequence
@@ -764,13 +764,18 @@ All routes are versioned under `/api/v1`.
 
 ---
 
+---
+
 ### 2. Document Endpoints
 
-#### `POST /api/v1/workspaces/{workspace_id}/documents/upload`
-*   **Purpose:** Upload a PDF file for background ingestion.
+In accordance with Phase 2 specifications, all document operations derive tenant identity strictly from the authenticated capability token (`Authorization: Bearer <token>`), eliminating untrusted client-supplied workspace identifiers.
+
+#### `POST /api/v1/documents`
+*   **Purpose:** Upload a PDF file for asynchronous, deterministic background extraction and sentence-aware chunking.
 *   **Headers:** `Content-Type: multipart/form-data`, `Authorization: Bearer <access_token>`.
 *   **Form Payload:** `file: <binary PDF data>`.
-*   **Validation Rules:** Extension `.pdf`, MIME `application/pdf`, magic bytes `%PDF-`, size $\le 10\text{ MB}$. Workspace limit $\le 5$ documents.
+*   **Validation Rules:** Extension `.pdf`, MIME `application/pdf`, magic bytes `%PDF-`, PyMuPDF parseability test, unencrypted check, non-empty check, size $\le 50\text{ MB}$ (`MAX_UPLOAD_SIZE_BYTES`).
+*   **Duplicate Detection:** Computes SHA-256 hash across uploaded bytes and returns `HTTP 409 Conflict` if the same file hash already exists in the authenticated workspace.
 *   **Response (202 Accepted):**
     ```json
     {
@@ -778,97 +783,109 @@ All routes are versioned under `/api/v1`.
       "workspace_id": "7b8e1a22-4a11-4f33-91a5-8c01d9f8e401",
       "filename": "solar_efficiency_2025.pdf",
       "file_size_bytes": 2458900,
+      "file_hash": "a1b2c3d4e5f60718...",
       "status": "PENDING",
       "created_at": "2026-10-13T12:05:00Z"
     }
     ```
 
-#### `GET /api/v1/workspaces/{workspace_id}/documents`
-*   **Purpose:** List all documents in workspace.
+#### `GET /api/v1/documents`
+*   **Purpose:** List documents belonging to the authenticated workspace with pagination support.
 *   **Headers:** `Authorization: Bearer <access_token>`
+*   **Query Parameters:** `skip` (default 0), `limit` (default 50, max 100).
+*   **Ordering:** Deterministic stable order (`created_at DESC, id DESC`).
 *   **Response (200 OK):**
     ```json
     {
       "documents": [
         {
           "id": "e4f1a233-0b12-4c55-8d99-1a2b3c4d5e6f",
+          "workspace_id": "7b8e1a22-4a11-4f33-91a5-8c01d9f8e401",
           "filename": "solar_efficiency_2025.pdf",
           "file_size_bytes": 2458900,
+          "file_hash": "a1b2c3d4e5f60718...",
           "page_count": 14,
-          "status": "COMPLETED",
+          "chunk_count": 42,
+          "status": "READY",
           "error_message": null,
-          "created_at": "2026-10-13T12:05:00Z"
+          "created_at": "2026-10-13T12:05:00Z",
+          "updated_at": "2026-10-13T12:05:15Z"
         }
-      ]
+      ],
+      "total": 1,
+      "skip": 0,
+      "limit": 50
     }
     ```
 
-#### `GET /api/v1/workspaces/{workspace_id}/documents/{document_id}/status`
-*   **Purpose:** Lightweight status polling endpoint.
+#### `GET /api/v1/documents/{document_id}`
+*   **Purpose:** Retrieve document metadata, processing status, page count, and chunk count.
 *   **Headers:** `Authorization: Bearer <access_token>`
+*   **Security:** Enforces workspace ownership; returns `404 Not Found` if document belongs to another workspace or does not exist.
 *   **Response (200 OK):**
     ```json
     {
-      "document_id": "e4f1a233-0b12-4c55-8d99-1a2b3c4d5e6f",
-      "status": "EMBEDDING",
-      "error_message": null
-    }
-    ```
-
-#### `POST /api/v1/workspaces/{workspace_id}/documents/{document_id}/retry` *(Optional MVP Endpoint)*
-*   **Purpose:** Retry ingestion for a document in `FAILED` status.
-*   **Headers:** `Authorization: Bearer <access_token>`
-*   **Allowed Status:** Permitted strictly when `status = 'FAILED'`. Returns `HTTP 409 Conflict` if called on any other state.
-*   **Response (202 Accepted):**
-    ```json
-    {
-      "document_id": "e4f1a233-0b12-4c55-8d99-1a2b3c4d5e6f",
-      "status": "PENDING",
-      "message": "Ingestion job re-queued."
-    }
-    ```
-
-#### `POST /api/v1/workspaces/{workspace_id}/documents/{document_id}/exclude` *(Document Exclusion Endpoint)*
-*   **Purpose:** Explicitly exclude an uploaded document from active retrieval scope and `CorpusCompatibilityGate` verification without deleting its physical PDF file or metadata.
-*   **Headers:** `Authorization: Bearer <access_token>` (capability token authenticating `workspace_id`).
-*   **Request Body:**
-    ```json
-    {
-      "exclusion_reason": "Contains non-extractable architectural blueprints; retained in storage for manual audit only."
-    }
-    ```
-*   **Validation Rules:**
-    *   Caller token must authorize the exact `workspace_id` in path (`401 Unauthorized` on mismatch).
-    *   Document must exist within `workspace_id` (`404 Not Found`).
-    *   Document must not be in `DELETING` status (`409 Conflict`).
-    *   `exclusion_reason` is required, non-empty, and must be at least 10 characters long (`400 Bad Request`, `error_code: "EXCLUSION_REASON_REQUIRED"`).
-*   **Audit & Execution Workflow:**
-    1. Authenticate capability token against `workspace_id`.
-    2. Within a database transaction, update `documents` table:
-       `is_corpus_excluded = TRUE`, `corpus_exclusion_reason = :exclusion_reason`, `corpus_excluded_at = NOW()`.
-    3. Emits an audit log event containing `(workspace_id, document_id, exclusion_reason, corpus_excluded_at)`.
-    4. The document is immediately omitted from the required corpus ($D_{\text{required}}$) by `CorpusCompatibilityGate`.
-*   **Response (200 OK):**
-    ```json
-    {
-      "document_id": "e4f1a233-0b12-4c55-8d99-1a2b3c4d5e6f",
+      "id": "e4f1a233-0b12-4c55-8d99-1a2b3c4d5e6f",
       "workspace_id": "7b8e1a22-4a11-4f33-91a5-8c01d9f8e401",
-      "is_corpus_excluded": true,
-      "corpus_exclusion_reason": "Contains non-extractable architectural blueprints; retained in storage for manual audit only.",
-      "corpus_excluded_at": "2026-10-13T15:30:00Z",
-      "message": "Document successfully excluded from active retrieval corpus and compatibility gate."
+      "filename": "solar_efficiency_2025.pdf",
+      "file_size_bytes": 2458900,
+      "file_hash": "a1b2c3d4e5f60718...",
+      "page_count": 14,
+      "chunk_count": 42,
+      "status": "READY",
+      "error_message": null,
+      "created_at": "2026-10-13T12:05:00Z",
+      "updated_at": "2026-10-13T12:05:15Z"
     }
     ```
-*   **Supported MVP Alternative:** If an operator wishes to exclude a failed or unneeded document without retaining it in library storage, the supported alternative is permanent removal via `DELETE /api/v1/workspaces/{workspace_id}/documents/{document_id}` or re-attempting extraction via `POST /api/v1/workspaces/{workspace_id}/documents/{document_id}/retry`.
 
-#### `DELETE /api/v1/workspaces/{workspace_id}/documents/{document_id}`
-*   **Purpose:** Idempotently delete document, raw file, pages, chunks, and embeddings, while flagging historical citations.
+#### `DELETE /api/v1/documents/{document_id}`
+*   **Purpose:** Idempotently delete document, raw PDF storage object, extracted pages, chunks, and embeddings.
 *   **Headers:** `Authorization: Bearer <access_token>`
+*   **Workflow:**
+    1. Authenticate capability token and verify workspace ownership.
+    2. Set `status = 'DELETING'` and increment `deletion_attempts` in database.
+    3. Delete physical object from storage backend (Supabase Storage or Local Storage).
+    4. Cascade-delete `documents` row and child `document_pages` / `document_chunks` records.
+    5. Flag historical citations in `messages.citations` with `document_deleted: true`.
 *   **Response (200 OK):**
     ```json
     {
       "success": true,
-      "message": "Document, raw file, and associated vectors permanently deleted; historical conversation citations flagged with document_deleted: true."
+      "document_id": "e4f1a233-0b12-4c55-8d99-1a2b3c4d5e6f",
+      "message": "Document and all associated processing outputs successfully deleted."
+    }
+    ```
+
+#### `POST /api/v1/documents/{document_id}/retry`
+*   **Purpose:** Retry ingestion for a document in `FAILED` status.
+*   **Headers:** `Authorization: Bearer <access_token>`
+*   **Allowed Status:** Permitted strictly when `status = 'FAILED'`. Returns `HTTP 409 Conflict` if called on an active or deleting document.
+*   **Execution:** Cleans up previous partial pages/chunks, resets status to `PENDING`, and re-triggers asynchronous background processing.
+*   **Response (202 Accepted):**
+    ```json
+    {
+      "id": "e4f1a233-0b12-4c55-8d99-1a2b3c4d5e6f",
+      "workspace_id": "7b8e1a22-4a11-4f33-91a5-8c01d9f8e401",
+      "filename": "solar_efficiency_2025.pdf",
+      "file_size_bytes": 2458900,
+      "file_hash": "a1b2c3d4e5f60718...",
+      "status": "PENDING",
+      "created_at": "2026-10-13T12:05:00Z"
+    }
+    ```
+
+#### `POST /api/v1/documents/recovery/stale-jobs`
+*   **Purpose:** Interrupted-job recovery sweeper for detecting and recovering crashed or orphaned jobs.
+*   **Headers:** `Authorization: Bearer <access_token>`
+*   **Behavior:** Scans documents in `PENDING`, `EXTRACTING`, or `CHUNKING` whose `processing_heartbeat` or `created_at` exceeds the 15-minute lease grace period (`INGESTION_LEASE_TIMEOUT_SECONDS = 900`). Resets retryable documents to `PENDING` (or marks exhausted retries as `FAILED`).
+*   **Response (200 OK):**
+    ```json
+    {
+      "scanned_count": 3,
+      "recovered_count": 2,
+      "failed_count": 1,
+      "message": "Stale job recovery completed successfully."
     }
     ```
 

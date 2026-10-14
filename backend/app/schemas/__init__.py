@@ -5,6 +5,15 @@ from backend.app.schemas.workspace import (
     TokenRotateResponse,
 )
 from backend.app.schemas.health import HealthResponse
+from backend.app.schemas.document import (
+    DocumentUploadResponse,
+    DocumentListItem,
+    DocumentListResponse,
+    DocumentDetailResponse,
+    DocumentDeleteResponse,
+    RecoveryResponse,
+    RecoveryItemResult,
+)
 
 __all__ = [
     "WorkspaceCreate",
@@ -12,4 +21,11 @@ __all__ = [
     "WorkspaceResponse",
     "TokenRotateResponse",
     "HealthResponse",
+    "DocumentUploadResponse",
+    "DocumentListItem",
+    "DocumentListResponse",
+    "DocumentDetailResponse",
+    "DocumentDeleteResponse",
+    "RecoveryResponse",
+    "RecoveryItemResult",
 ]
